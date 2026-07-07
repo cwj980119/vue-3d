@@ -47,6 +47,7 @@ import {
 } from '@/rendering/stacking';
 import { buildTransferControlPoints } from '@/rendering/transferFunction';
 import {
+  applyDiscreteLabelVolumeInterpolation,
   getVolumeRenderingBlendMode,
   getVolumeRenderingLabel,
   isShadedVolumeRendering,
@@ -437,7 +438,7 @@ function applyTransferFunctions(): void {
   property.setRGBTransferFunction(0, colorTransfer);
   property.setScalarOpacity(0, opacityTransfer);
   property.setScalarOpacityUnitDistance(0, Math.max(0.2, downsampleFactor.value * 0.85));
-  property.setInterpolationTypeToFastLinear();
+  applyDiscreteLabelVolumeInterpolation(property);
   property.setShade(isShadedVolumeRendering(volumeRenderingMode.value));
   property.setAmbient(0.42);
   property.setDiffuse(0.7);

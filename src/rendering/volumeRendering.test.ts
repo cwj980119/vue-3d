@@ -1,6 +1,7 @@
 import { BlendMode } from '@kitware/vtk.js/Rendering/Core/VolumeMapper/Constants';
 import { describe, expect, test } from 'vitest';
 
+import * as volumeRendering from './volumeRendering';
 import {
   getVolumeRenderingBlendMode,
   getVolumeRenderingLabel,
@@ -39,5 +40,30 @@ describe('volume rendering presets', () => {
       icon: 'MAX',
       description: 'Shows the brightest voxel encountered along each view ray.',
     });
+  });
+
+  test('configures discrete label volumes to sample exact voxel values', () => {
+    const renderingPolicy = volumeRendering as unknown as {
+      applyDiscreteLabelVolumeInterpolation?: (property: {
+        setInterpolationTypeToNearest: () => void;
+        setInterpolationTypeToFastLinear: () => void;
+      }) => void;
+    };
+    expect(typeof renderingPolicy.applyDiscreteLabelVolumeInterpolation).toBe('function');
+
+    let nearestCalls = 0;
+    let fastLinearCalls = 0;
+
+    renderingPolicy.applyDiscreteLabelVolumeInterpolation!({
+      setInterpolationTypeToNearest: () => {
+        nearestCalls += 1;
+      },
+      setInterpolationTypeToFastLinear: () => {
+        fastLinearCalls += 1;
+      },
+    });
+
+    expect(nearestCalls).toBe(1);
+    expect(fastLinearCalls).toBe(0);
   });
 });

@@ -2,6 +2,10 @@ import { BlendMode } from '@kitware/vtk.js/Rendering/Core/VolumeMapper/Constants
 
 export type VolumeRenderingMode = 'translucent' | 'mip' | 'minip' | 'average' | 'additive';
 
+export interface DiscreteLabelVolumeProperty {
+  setInterpolationTypeToNearest: () => unknown;
+}
+
 export interface VolumeRenderingOption {
   value: VolumeRenderingMode;
   label: string;
@@ -64,4 +68,10 @@ export function getVolumeRenderingLabel(mode: VolumeRenderingMode): string {
 
 export function isShadedVolumeRendering(mode: VolumeRenderingMode): boolean {
   return mode === 'translucent';
+}
+
+export function applyDiscreteLabelVolumeInterpolation(
+  property: DiscreteLabelVolumeProperty,
+): void {
+  property.setInterpolationTypeToNearest();
 }
