@@ -46,6 +46,13 @@ backend/sample_volumes/11111111-1111-1111-1111-111111111111.tif
 Each TIFF must load through `tifffile` as a 3D `uint8` array. The backend accepts
 `.tif` and `.tiff` files.
 
+The default demo TIFF is ignored by git because it is large. Generate it locally
+after cloning:
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.scripts.create_sample_tiff
+```
+
 ## Frontend
 
 ```powershell
