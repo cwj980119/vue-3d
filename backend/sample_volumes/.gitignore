@@ -1,0 +1,5 @@
+*.tif
+*.tiff
+!.gitignore
+!README.md
+!.gitkeep

@@ -1,0 +1,1 @@
+export const DEFAULT_SAMPLE_DISTANCE = 1.3;
