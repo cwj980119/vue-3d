@@ -757,10 +757,7 @@ onUnmounted(() => {
     <header
       class="shrink-0 border-b border-zinc-300 bg-zinc-200/90 text-xs text-zinc-700 dark:border-[#303036] dark:bg-[#1c1c22] dark:text-zinc-300"
     >
-      <div class="flex h-8 items-center justify-between gap-3 px-3">
-        <div class="flex min-w-0 items-center gap-4">
-          <span class="font-semibold text-zinc-950 dark:text-zinc-50">napari-web</span>
-        </div>
+      <div class="flex h-8 items-center justify-end gap-3 px-3">
         <div class="flex shrink-0 items-center gap-3 tabular-nums">
           <span>{{ visibleLayerCount }} / {{ napariLayers.length }} layers</span>
           <span>{{ loading ? 'Loading' : status }}</span>
