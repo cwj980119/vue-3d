@@ -8,7 +8,7 @@ import tifffile
 from backend.volume_service import SyntheticVolumeService
 
 
-DEFAULT_VOLUME_UUID = "synthetic-sample-500x500x1000"
+DEFAULT_VOLUME_UUID = "output"
 
 
 def main() -> None:

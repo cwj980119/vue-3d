@@ -60,7 +60,7 @@ npm.cmd run dev
 ```
 
 Open `http://127.0.0.1:5173`. Without a query string, the sample app loads
-`synthetic-sample-500x500x1000.tif` from `backend/sample_volumes`.
+`output.tif` from `backend/sample_volumes`.
 
 To load a different local TIFF sample through the Vite proxy, add `volumeUuid`:
 
