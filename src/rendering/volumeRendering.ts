@@ -1,9 +1,30 @@
 import { BlendMode } from '@kitware/vtk.js/Rendering/Core/VolumeMapper/Constants';
 
-export type VolumeRenderingMode = 'translucent' | 'mip' | 'minip' | 'average' | 'additive';
+export type VolumeRenderingMode =
+  | 'translucent'
+  | 'mip'
+  | 'minip'
+  | 'average'
+  | 'additive'
+  | 'solid-labels';
 
 export interface DiscreteLabelVolumeProperty {
   setInterpolationTypeToNearest: () => unknown;
+}
+
+export interface VolumeLightingConfig {
+  shade: boolean;
+  ambient: number;
+  diffuse: number;
+  specular: number;
+  specularPower: number;
+}
+
+export interface LabelLayerRenderOpacityConfig {
+  mode: VolumeRenderingMode;
+  layerVisible: boolean;
+  layerOpacity: number;
+  volumeOpacity: number;
 }
 
 export interface VolumeRenderingOption {
@@ -44,6 +65,12 @@ export const VOLUME_RENDERING_OPTIONS: VolumeRenderingOption[] = [
     icon: 'SUM',
     description: 'Adds sampled voxel values until the rendered color saturates.',
   },
+  {
+    value: 'solid-labels',
+    label: 'Solid Labels',
+    icon: 'LBL',
+    description: 'Shows labels with flat colors and no lighting variation.',
+  },
 ];
 
 export function getVolumeRenderingBlendMode(mode: VolumeRenderingMode): BlendMode {
@@ -56,6 +83,7 @@ export function getVolumeRenderingBlendMode(mode: VolumeRenderingMode): BlendMod
       return BlendMode.AVERAGE_INTENSITY_BLEND;
     case 'additive':
       return BlendMode.ADDITIVE_INTENSITY_BLEND;
+    case 'solid-labels':
     case 'translucent':
     default:
       return BlendMode.COMPOSITE_BLEND;
@@ -68,6 +96,41 @@ export function getVolumeRenderingLabel(mode: VolumeRenderingMode): string {
 
 export function isShadedVolumeRendering(mode: VolumeRenderingMode): boolean {
   return mode === 'translucent';
+}
+
+export function getVolumeLightingConfig(mode: VolumeRenderingMode): VolumeLightingConfig {
+  if (mode === 'solid-labels') {
+    return {
+      shade: false,
+      ambient: 1,
+      diffuse: 0,
+      specular: 0,
+      specularPower: 1,
+    };
+  }
+
+  return {
+    shade: isShadedVolumeRendering(mode),
+    ambient: 0.42,
+    diffuse: 0.7,
+    specular: 0.18,
+    specularPower: 8,
+  };
+}
+
+export function getLabelLayerRenderOpacity({
+  mode,
+  layerVisible,
+  layerOpacity,
+  volumeOpacity,
+}: LabelLayerRenderOpacityConfig): number {
+  if (!layerVisible) {
+    return 0;
+  }
+  if (mode === 'solid-labels') {
+    return volumeOpacity;
+  }
+  return layerOpacity * volumeOpacity;
 }
 
 export function applyDiscreteLabelVolumeInterpolation(

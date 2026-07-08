@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import VolumeViewer from './components/VolumeViewer.vue';
+import { resolveVolumeUuid } from './defaultVolume';
 
-const DEFAULT_VOLUME_UUID = 'synthetic-sample-500x500x1000';
-const volumeUuid = new URLSearchParams(window.location.search).get('volumeUuid') ?? DEFAULT_VOLUME_UUID;
+const volumeUuid = resolveVolumeUuid(new URLSearchParams(window.location.search));
 </script>
 
 <template>

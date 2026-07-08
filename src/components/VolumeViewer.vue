@@ -48,9 +48,10 @@ import {
 import { buildTransferControlPoints } from '@/rendering/transferFunction';
 import {
   applyDiscreteLabelVolumeInterpolation,
+  getLabelLayerRenderOpacity,
   getVolumeRenderingBlendMode,
   getVolumeRenderingLabel,
-  isShadedVolumeRendering,
+  getVolumeLightingConfig,
   VOLUME_RENDERING_OPTIONS,
   type VolumeRenderingMode,
 } from '@/rendering/volumeRendering';
@@ -420,7 +421,12 @@ function applyTransferFunctions(): void {
     backgroundOpacity: 0,
     layers: intensityLayers.value.map((layer) => ({
       color: layer.color,
-      opacity: layer.visible ? layer.opacity * volumeOpacity : 0,
+      opacity: getLabelLayerRenderOpacity({
+        mode: volumeRenderingMode.value,
+        layerVisible: layer.visible,
+        layerOpacity: layer.opacity,
+        volumeOpacity,
+      }),
       range: layer.intensityRange ?? [0, labelValueMax.value],
     })),
   });
@@ -435,15 +441,16 @@ function applyTransferFunctions(): void {
   });
 
   const property = vtkState.actor.getProperty();
+  const lighting = getVolumeLightingConfig(volumeRenderingMode.value);
   property.setRGBTransferFunction(0, colorTransfer);
   property.setScalarOpacity(0, opacityTransfer);
   property.setScalarOpacityUnitDistance(0, Math.max(0.2, downsampleFactor.value * 0.85));
   applyDiscreteLabelVolumeInterpolation(property);
-  property.setShade(isShadedVolumeRendering(volumeRenderingMode.value));
-  property.setAmbient(0.42);
-  property.setDiffuse(0.7);
-  property.setSpecular(0.18);
-  property.setSpecularPower(8);
+  property.setShade(lighting.shade);
+  property.setAmbient(lighting.ambient);
+  property.setDiffuse(lighting.diffuse);
+  property.setSpecular(lighting.specular);
+  property.setSpecularPower(lighting.specularPower);
 
   vtkState.mapper.setSampleDistance(sampleDistance.value);
   scheduleRender();
@@ -455,7 +462,15 @@ function applyVolumeRenderingMode(): void {
   }
 
   vtkState.mapper.setBlendMode(getVolumeRenderingBlendMode(volumeRenderingMode.value));
-  vtkState.actor?.getProperty().setShade(isShadedVolumeRendering(volumeRenderingMode.value));
+  const property = vtkState.actor?.getProperty();
+  if (property) {
+    const lighting = getVolumeLightingConfig(volumeRenderingMode.value);
+    property.setShade(lighting.shade);
+    property.setAmbient(lighting.ambient);
+    property.setDiffuse(lighting.diffuse);
+    property.setSpecular(lighting.specular);
+    property.setSpecularPower(lighting.specularPower);
+  }
   scheduleRender();
 }
 
