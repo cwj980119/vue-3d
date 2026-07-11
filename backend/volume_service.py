@@ -81,6 +81,52 @@ def downsample_volume(volume: NDArray[np.uint8], factor: int) -> NDArray[np.uint
 downsample_labels = downsample_volume
 
 
+def downsampled_volume_shape(
+    shape: tuple[int, int, int],
+    factor: int,
+) -> tuple[int, int, int]:
+    checked_factor = SyntheticVolumeService._checked_factor(factor)
+    return (
+        shape[0] // checked_factor,
+        shape[1] // checked_factor,
+        shape[2] // checked_factor,
+    )
+
+
+def iter_uint8_layers(values: NDArray[np.uint8]):
+    if values.ndim != 3:
+        raise ValueError(f"Expected a 3D uint8 volume, got shape={values.shape}")
+
+    for z_index in range(values.shape[0]):
+        yield np.ascontiguousarray(values[z_index]).tobytes(order="C")
+
+
+def iter_downsampled_uint8_layers(values: NDArray[np.uint8], factor: int):
+    checked_factor = SyntheticVolumeService._checked_factor(factor)
+    if checked_factor == 1:
+        yield from iter_uint8_layers(values)
+        return
+
+    out_z_size, out_y_size, out_x_size = downsampled_volume_shape(
+        values.shape,
+        checked_factor,
+    )
+    trimmed_y_size = out_y_size * checked_factor
+    trimmed_x_size = out_x_size * checked_factor
+
+    for z_index in range(out_z_size):
+        z0 = z_index * checked_factor
+        z1 = z0 + checked_factor
+        block = values[z0:z1, :trimmed_y_size, :trimmed_x_size].reshape(
+            checked_factor,
+            out_y_size,
+            checked_factor,
+            out_x_size,
+            checked_factor,
+        )
+        yield np.ascontiguousarray(np.max(block, axis=(0, 2, 4))).tobytes(order="C")
+
+
 @dataclass(frozen=True)
 class SyntheticVolumeService:
     shape: tuple[int, int, int] = (500, 500, 1000)

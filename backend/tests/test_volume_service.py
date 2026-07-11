@@ -6,6 +6,7 @@ from backend.volume_service import (
     INTENSITY_SMALL_PARTICLE,
     SyntheticVolumeService,
     downsample_volume,
+    iter_downsampled_uint8_layers,
 )
 
 
@@ -106,6 +107,15 @@ def test_downsample_volume_preserves_brightest_voxels_in_blocks():
     assert downsampled.shape == (2, 2, 2)
     assert downsampled[0, 0, 0] == 2
     assert downsampled[1, 1, 1] == 2
+
+
+def test_iter_downsampled_uint8_layers_matches_downsampled_volume_order():
+    volume = np.arange(4 * 4 * 6, dtype=np.uint8).reshape(4, 4, 6)
+
+    streamed = b"".join(iter_downsampled_uint8_layers(volume, factor=2))
+    downsampled = downsample_volume(volume, factor=2)
+
+    assert streamed == downsampled.tobytes(order="C")
 
 
 def test_downsampled_volume_keeps_discrete_uint8_labels():

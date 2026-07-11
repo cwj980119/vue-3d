@@ -31,9 +31,11 @@ Endpoints:
 - `GET /api/volume/meta`
 - `GET /api/volume/slice?axis=z&index=250`
 - `GET /api/volume/downsampled?factor=4`
+- `GET /api/volume/downsampled-layers?factor=4`
 - `GET /api/volumes/{uuid}/meta`
 - `GET /api/volumes/{uuid}/slice?axis=z&index=250`
 - `GET /api/volumes/{uuid}/downsampled?factor=4`
+- `GET /api/volumes/{uuid}/downsampled-layers?factor=4`
 
 ## Local TIFF Samples
 

@@ -17,7 +17,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import {
   createSliceImageData,
-  fetchDownsampledVolume,
+  fetchDownsampledVolumeLayers,
   fetchSlicePayload,
   fetchVolumeMeta,
   type BinaryPayload,
@@ -75,6 +75,8 @@ import {
 import { isPanelVisible, type ViewerMode } from './viewMode';
 
 type GenericRenderWindow = ReturnType<typeof vtkGenericRenderWindow.newInstance>;
+type VtkDataArray = ReturnType<typeof vtkDataArray.newInstance>;
+type VtkImageData = ReturnType<typeof vtkImageData.newInstance>;
 type VtkVolume = ReturnType<typeof vtkVolume.newInstance>;
 type VtkVolumeMapper = ReturnType<typeof vtkVolumeMapper.newInstance>;
 type VtkOrientationMarkerWidget = ReturnType<typeof vtkOrientationMarkerWidget.newInstance>;
@@ -112,6 +114,9 @@ const isSlicePlaying = ref(false);
 const loading = ref(false);
 const errorMessage = ref('');
 const status = ref('Loading metadata');
+const volumeLoaded = ref(false);
+const volumeStreamLoadedLayers = ref(0);
+const volumeStreamTotalLayers = ref(0);
 const sliceCanvas = ref<HTMLCanvasElement | null>(null);
 const vtkContainer = ref<HTMLDivElement | null>(null);
 const volumeShape = ref<number[]>([]);
@@ -129,6 +134,9 @@ const vtkState = {
 let renderFrameId: number | null = null;
 let playbackTimerId: number | null = null;
 let slicePlaybackTimerId: number | null = null;
+let volumeAbortController: AbortController | null = null;
+let volumeLoadSequence = 0;
+const volumePayloadCache = new Map<string, BinaryPayload>();
 
 const axisSize = computed(() => {
   if (!meta.value) {
@@ -155,6 +163,22 @@ const volumeShapeLabel = computed(() => {
 });
 
 const originalShapeLabel = computed(() => meta.value?.shape.join(' x ') ?? '-');
+const volumeStreamPercent = computed(() => {
+  if (volumeStreamTotalLayers.value <= 0) {
+    return 0;
+  }
+  return Math.min(
+    100,
+    Math.round((volumeStreamLoadedLayers.value / volumeStreamTotalLayers.value) * 100),
+  );
+});
+const volumeStreamProgressLabel = computed(() => {
+  if (volumeStreamTotalLayers.value <= 0) {
+    return 'Z 0 / 0';
+  }
+  return `Z ${volumeStreamLoadedLayers.value} / ${volumeStreamTotalLayers.value}`;
+});
+const isInteractionLocked = computed(() => loading.value && mode.value === '3d');
 const sliceProgressLabel = computed(() => `${sliceIndex.value} / ${sliceMax.value}`);
 const show3dPanel = computed(() => isPanelVisible(mode.value, '3d'));
 const show2dPanel = computed(() => isPanelVisible(mode.value, '2d'));
@@ -241,6 +265,29 @@ function stopSlicePlayback(): void {
     slicePlaybackTimerId = null;
   }
   isSlicePlaying.value = false;
+}
+
+function abortVolumeLoad(): void {
+  if (volumeAbortController) {
+    volumeAbortController.abort();
+    volumeAbortController = null;
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof DOMException && error.name === 'AbortError'
+  ) || (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    (error as { name?: unknown }).name === 'AbortError'
+  );
+}
+
+function resetVolumeStreamProgress(): void {
+  volumeStreamLoadedLayers.value = 0;
+  volumeStreamTotalLayers.value = 0;
 }
 
 function tickSlicePlayback(): void {
@@ -544,6 +591,8 @@ function removeCurrentVolume(): void {
   if (vtkState.renderWindow && vtkState.actor) {
     vtkState.renderWindow.getRenderer().removeVolume(vtkState.actor);
   }
+  vtkState.actor?.delete();
+  vtkState.mapper?.delete();
   vtkState.actor = null;
   vtkState.mapper = null;
 }
@@ -573,7 +622,7 @@ function applyStackClipping(): void {
   scheduleRender();
 }
 
-function createImageData(payload: BinaryPayload): ReturnType<typeof vtkImageData.newInstance> {
+function createImageData(payload: BinaryPayload, factor = downsampleFactor.value): VtkImageData {
   if (payload.shape.length !== 3) {
     throw new Error(`Invalid volume shape: ${payload.shape.join(',')}`);
   }
@@ -585,7 +634,7 @@ function createImageData(payload: BinaryPayload): ReturnType<typeof vtkImageData
 
   const imageData = vtkImageData.newInstance();
   imageData.setDimensions(xSize, ySize, zSize);
-  imageData.setSpacing([downsampleFactor.value, downsampleFactor.value, downsampleFactor.value]);
+  imageData.setSpacing([factor, factor, factor]);
   imageData.setOrigin([0, 0, 0]);
   imageData.getPointData().setScalars(
     vtkDataArray.newInstance({
@@ -597,40 +646,165 @@ function createImageData(payload: BinaryPayload): ReturnType<typeof vtkImageData
   return imageData;
 }
 
+function markVolumeDataChanged(
+  imageData: VtkImageData,
+  scalars: VtkDataArray,
+  mapper: VtkVolumeMapper,
+): void {
+  scalars.dataChange();
+  imageData.modified();
+  mapper.modified();
+  scheduleRender();
+}
+
+function renderVolumePayload(payload: BinaryPayload, factor: number): void {
+  volumeShape.value = payload.shape;
+  volumeStreamTotalLayers.value = payload.shape[0] ?? 0;
+  volumeStreamLoadedLayers.value = volumeStreamTotalLayers.value;
+
+  const genericWindow = ensureVtkWindow();
+  const mapper = vtkVolumeMapper.newInstance();
+  const actor = vtkVolume.newInstance();
+  mapper.setInputData(createImageData(payload, factor));
+  mapper.setSampleDistance(sampleDistance.value);
+  mapper.setBlendMode(getVolumeRenderingBlendMode(volumeRenderingMode.value));
+  actor.setMapper(mapper);
+
+  removeCurrentVolume();
+  vtkState.actor = actor;
+  vtkState.mapper = mapper;
+  genericWindow.getRenderer().addVolume(actor);
+  if (renderAxis.value === 'z') {
+    stackEndIndex.value = stackMax.value;
+  }
+  applyLayerVisibility();
+  applyCameraView('iso');
+  scheduleRender();
+  volumeLoaded.value = true;
+  status.value = `3D volume ${volumeShapeLabel.value}`;
+}
+
+function getVolumeCacheKey(factor: number): string {
+  return `${props.apiBaseUrl}\u0000${props.volumeUuid ?? ''}\u0000${factor}`;
+}
+
 async function loadVolume(): Promise<void> {
+  abortVolumeLoad();
+  const loadId = volumeLoadSequence + 1;
+  volumeLoadSequence = loadId;
+  const requestedFactor = downsampleFactor.value;
+  const cacheKey = getVolumeCacheKey(requestedFactor);
+  const cachedPayload = volumePayloadCache.get(cacheKey);
+  if (cachedPayload) {
+    clearError();
+    loading.value = false;
+    try {
+      await nextTick();
+      renderVolumePayload(cachedPayload, requestedFactor);
+    } catch (error) {
+      volumeLoaded.value = false;
+      setError(error);
+    }
+    return;
+  }
+
+  const abortController = new AbortController();
+  volumeAbortController = abortController;
   clearError();
   loading.value = true;
-  status.value = `Loading 3D volume at ${downsampleFactor.value}x downsample`;
+  volumeLoaded.value = false;
+  resetVolumeStreamProgress();
+  status.value = `Opening 3D layer stream at ${requestedFactor}x downsample`;
+
+  let imageData: VtkImageData | null = null;
+  let scalars: VtkDataArray | null = null;
+  let mapper: VtkVolumeMapper | null = null;
 
   try {
     await nextTick();
-    const payload = await fetchDownsampledVolume(
+    const payload = await fetchDownsampledVolumeLayers(
       props.apiBaseUrl,
-      downsampleFactor.value,
+      requestedFactor,
       { volumeUuid: props.volumeUuid },
+      {
+        onStart: (stream) => {
+          if (loadId !== volumeLoadSequence || abortController.signal.aborted) {
+            return;
+          }
+
+          volumeShape.value = stream.shape;
+          volumeStreamTotalLayers.value = stream.totalLayers;
+          volumeStreamLoadedLayers.value = 0;
+
+          const genericWindow = ensureVtkWindow();
+          mapper = vtkVolumeMapper.newInstance();
+          const actor = vtkVolume.newInstance();
+          imageData = createImageData(stream, requestedFactor);
+          scalars = imageData.getPointData().getScalars();
+          mapper.setInputData(imageData);
+          mapper.setSampleDistance(sampleDistance.value);
+          mapper.setBlendMode(getVolumeRenderingBlendMode(volumeRenderingMode.value));
+          actor.setMapper(mapper);
+
+          removeCurrentVolume();
+          vtkState.actor = actor;
+          vtkState.mapper = mapper;
+          genericWindow.getRenderer().addVolume(actor);
+          if (renderAxis.value === 'z') {
+            stackEndIndex.value = 0;
+          }
+          applyLayerVisibility();
+          applyCameraView('iso');
+          status.value = `Receiving layers ${volumeStreamProgressLabel.value}`;
+          scheduleRender();
+        },
+        onLayer: (layer) => {
+          if (
+            loadId !== volumeLoadSequence ||
+            abortController.signal.aborted ||
+            !imageData ||
+            !scalars ||
+            !mapper
+          ) {
+            return;
+          }
+
+          volumeStreamTotalLayers.value = layer.totalLayers;
+          volumeStreamLoadedLayers.value = layer.layersLoaded;
+          status.value = `Receiving layers ${volumeStreamProgressLabel.value}`;
+          if (renderAxis.value === 'z') {
+            stackEndIndex.value = Math.min(
+              stackMax.value,
+              Math.max(0, layer.layersLoaded * requestedFactor - 1),
+            );
+          }
+          markVolumeDataChanged(imageData, scalars, mapper);
+        },
+      },
+      abortController.signal,
     );
+    if (loadId !== volumeLoadSequence || abortController.signal.aborted) {
+      return;
+    }
+
+    volumePayloadCache.set(cacheKey, payload);
     volumeShape.value = payload.shape;
-
-    const genericWindow = ensureVtkWindow();
-    const mapper = vtkVolumeMapper.newInstance();
-    const actor = vtkVolume.newInstance();
-    mapper.setInputData(createImageData(payload));
-    mapper.setSampleDistance(sampleDistance.value);
-    mapper.setBlendMode(getVolumeRenderingBlendMode(volumeRenderingMode.value));
-    actor.setMapper(mapper);
-
-    removeCurrentVolume();
-    vtkState.actor = actor;
-    vtkState.mapper = mapper;
-    genericWindow.getRenderer().addVolume(actor);
-    applyLayerVisibility();
-    applyCameraView('iso');
-    scheduleRender();
+    volumeStreamLoadedLayers.value = volumeStreamTotalLayers.value || (payload.shape[0] ?? 0);
+    volumeLoaded.value = true;
+    if (renderAxis.value === 'z') {
+      stackEndIndex.value = stackMax.value;
+    }
     status.value = `3D volume ${volumeShapeLabel.value}`;
   } catch (error) {
+    if (isAbortError(error)) {
+      return;
+    }
     setError(error);
   } finally {
-    loading.value = false;
+    if (loadId === volumeLoadSequence) {
+      loading.value = false;
+      volumeAbortController = null;
+    }
   }
 }
 
@@ -670,6 +844,7 @@ watch(sliceIndex, async () => {
 watch(mode, async (nextMode) => {
   if (nextMode !== '3d') {
     stopStackPlayback();
+    abortVolumeLoad();
   }
   if (nextMode !== '2d') {
     stopSlicePlayback();
@@ -677,7 +852,7 @@ watch(mode, async (nextMode) => {
   if (nextMode === '2d') {
     await loadSlice();
   }
-  if (nextMode === '3d' && !vtkState.actor) {
+  if (nextMode === '3d' && !volumeLoaded.value) {
     await loadVolume();
   }
 });
@@ -739,6 +914,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  abortVolumeLoad();
   stopStackPlayback();
   stopSlicePlayback();
   if (renderFrameId !== null && typeof window !== 'undefined') {
@@ -752,7 +928,8 @@ onUnmounted(() => {
 
 <template>
   <section
-    class="mx-auto flex h-screen w-full max-w-[1800px] flex-col overflow-hidden bg-zinc-100 text-zinc-950 dark:bg-[#101014] dark:text-zinc-100"
+    class="relative mx-auto flex h-screen w-full max-w-[1800px] flex-col overflow-hidden bg-zinc-100 text-zinc-950 dark:bg-[#101014] dark:text-zinc-100"
+    :aria-busy="isInteractionLocked"
   >
     <header
       class="shrink-0 border-b border-zinc-300 bg-zinc-200/90 text-xs text-zinc-700 dark:border-[#303036] dark:bg-[#1c1c22] dark:text-zinc-300"
@@ -760,7 +937,7 @@ onUnmounted(() => {
       <div class="flex h-8 items-center justify-end gap-3 px-3">
         <div class="flex shrink-0 items-center gap-3 tabular-nums">
           <span>{{ visibleLayerCount }} / {{ napariLayers.length }} layers</span>
-          <span>{{ loading ? 'Loading' : status }}</span>
+          <span>{{ status }}</span>
         </div>
       </div>
     </header>
@@ -772,7 +949,10 @@ onUnmounted(() => {
       {{ errorMessage }}
     </div>
 
-    <div class="grid min-h-0 flex-1 grid-cols-[292px_minmax(0,1fr)]">
+    <div
+      class="grid min-h-0 flex-1 grid-cols-[292px_minmax(0,1fr)]"
+      :inert="isInteractionLocked"
+    >
       <aside
         class="flex min-h-0 flex-col border-r border-zinc-300 bg-zinc-50 text-xs dark:border-[#303036] dark:bg-[#18181d]"
       >
@@ -1256,6 +1436,45 @@ onUnmounted(() => {
           <span class="truncate text-right">{{ mode.toUpperCase() }} / {{ loading ? 'loading' : 'ready' }}</span>
         </div>
       </main>
+    </div>
+
+    <div
+      v-if="isInteractionLocked"
+      data-testid="volume-loading-overlay"
+      class="absolute inset-0 z-50 flex items-center justify-center bg-black/40"
+      role="status"
+      aria-live="polite"
+      aria-label="Loading 3D volume data"
+    >
+      <div
+        class="w-[min(320px,calc(100%-32px))] border border-white/15 bg-zinc-950/90 px-6 py-5 text-center text-zinc-100 shadow-2xl"
+      >
+        <div
+          class="mx-auto h-11 w-11 animate-spin rounded-full border-4 border-zinc-600 border-t-cyan-400"
+          aria-hidden="true"
+        ></div>
+        <p class="mt-4 text-sm font-semibold">Loading 3D data</p>
+        <p class="mt-1 text-3xl font-semibold tabular-nums text-cyan-300">
+          {{ volumeStreamPercent }}%
+        </p>
+        <p class="mt-1 text-xs tabular-nums text-zinc-400">
+          {{ volumeStreamProgressLabel }}
+        </p>
+        <div
+          class="mt-4 h-2 overflow-hidden rounded-full bg-zinc-800"
+          role="progressbar"
+          aria-label="3D data loading progress"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="volumeStreamPercent"
+        >
+          <div
+            class="h-full rounded-full bg-cyan-400 transition-[width] duration-150 ease-out"
+            :style="{ width: `${volumeStreamPercent}%` }"
+          ></div>
+        </div>
+        <p class="mt-3 text-[11px] text-zinc-500">Controls are available after loading</p>
+      </div>
     </div>
   </section>
 </template>

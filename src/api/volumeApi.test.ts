@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from 'vitest';
 import {
   createSliceImageData,
   fetchBinaryPayload,
+  fetchDownsampledVolumeLayers,
   fetchVolumeMeta,
   joinApiPath,
   parseShapeHeader,
@@ -47,6 +48,58 @@ describe('volumeApi helpers', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8000/api/test', {
       cache: 'no-store',
     });
+  });
+
+  test('fetchDownsampledVolumeLayers reports progress on layer boundaries', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.enqueue(new Uint8Array([4, 5, 6, 7, 8]));
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn(async () => {
+      return new Response(body, {
+        headers: {
+          'X-Volume-Shape': '2,2,2',
+          'X-Volume-Layer-Size': '4',
+          'X-Volume-Layer-Count': '2',
+        },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const starts: number[] = [];
+    const progress: Array<{ layerIndex: number; layersLoaded: number; data: number[] }> = [];
+    const payload = await fetchDownsampledVolumeLayers(
+      'http://localhost:8000',
+      2,
+      {},
+      {
+        onStart: (stream) => {
+          starts.push(stream.totalLayers);
+        },
+        onLayer: (layer) => {
+          progress.push({
+            layerIndex: layer.layerIndex,
+            layersLoaded: layer.layersLoaded,
+            data: [...layer.data],
+          });
+        },
+      },
+    );
+
+    expect(payload.shape).toEqual([2, 2, 2]);
+    expect([...payload.data]).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(starts).toEqual([2]);
+    expect(progress).toEqual([
+      { layerIndex: 0, layersLoaded: 1, data: [1, 2, 3, 4, 0, 0, 0, 0] },
+      { layerIndex: 1, layersLoaded: 2, data: [1, 2, 3, 4, 5, 6, 7, 8] },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/api/volume/downsampled-layers?factor=2',
+      { cache: 'no-store', signal: undefined },
+    );
   });
 
   test('fetchVolumeMeta keeps intensity ranges from backend metadata', async () => {

@@ -11,7 +11,11 @@ from backend.file_volume_service import (
     TiffVolumeService,
     iter_uint8_chunks,
 )
-from backend.volume_service import SyntheticVolumeService
+from backend.volume_service import (
+    SyntheticVolumeService,
+    downsampled_volume_shape,
+    iter_downsampled_uint8_layers,
+)
 
 Axis = Literal["x", "y", "z"]
 
@@ -75,6 +79,31 @@ def volume_downsampled(factor: int = 1) -> Response:
     )
 
 
+@app.get("/api/volume/downsampled-layers")
+def volume_downsampled_layers(factor: int = 1) -> StreamingResponse:
+    try:
+        volume = service.volume()
+        shape = downsampled_volume_shape(volume.shape, factor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    layer_size = shape[1] * shape[2]
+    return StreamingResponse(
+        iter_downsampled_uint8_layers(volume, factor),
+        media_type="application/octet-stream",
+        headers={
+            "X-Volume-Shape": ",".join(str(value) for value in shape),
+            "X-Volume-Dtype": "uint8",
+            "X-Downsample-Factor": str(factor),
+            "X-Volume-Stream-Axis": "z",
+            "X-Volume-Stream-Order": "ascending",
+            "X-Volume-Layer-Size": str(layer_size),
+            "X-Volume-Layer-Count": str(shape[0]),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 @app.get("/api/volumes/{volume_uuid}/meta")
 def tiff_volume_meta(volume_uuid: str) -> dict[str, object]:
     try:
@@ -128,6 +157,33 @@ def tiff_volume_downsampled(volume_uuid: str, factor: int = 1) -> Response:
             "X-Volume-Shape": ",".join(str(value) for value in volume.shape),
             "X-Volume-Dtype": "uint8",
             "X-Downsample-Factor": str(factor),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.get("/api/volumes/{volume_uuid}/downsampled-layers")
+def tiff_volume_downsampled_layers(volume_uuid: str, factor: int = 1) -> StreamingResponse:
+    try:
+        volume = file_volume_service.volume(volume_uuid)
+        shape = downsampled_volume_shape(volume.shape, factor)
+    except TiffVolumeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    layer_size = shape[1] * shape[2]
+    return StreamingResponse(
+        iter_downsampled_uint8_layers(volume, factor),
+        media_type="application/octet-stream",
+        headers={
+            "X-Volume-Shape": ",".join(str(value) for value in shape),
+            "X-Volume-Dtype": "uint8",
+            "X-Downsample-Factor": str(factor),
+            "X-Volume-Stream-Axis": "z",
+            "X-Volume-Stream-Order": "ascending",
+            "X-Volume-Layer-Size": str(layer_size),
+            "X-Volume-Layer-Count": str(shape[0]),
             "Cache-Control": "no-store",
         },
     )

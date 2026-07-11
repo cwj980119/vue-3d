@@ -25,6 +25,22 @@ export interface BinaryPayload {
   data: Uint8Array;
 }
 
+export interface VolumeStreamStart extends BinaryPayload {
+  layerSize: number;
+  totalLayers: number;
+}
+
+export interface VolumeStreamLayer extends VolumeStreamStart {
+  bytesLoaded: number;
+  layerIndex: number;
+  layersLoaded: number;
+}
+
+export interface VolumeStreamCallbacks {
+  onStart?: (payload: VolumeStreamStart) => void;
+  onLayer?: (payload: VolumeStreamLayer) => void;
+}
+
 export interface VolumeRequestOptions {
   volumeUuid?: string;
 }
@@ -55,6 +71,18 @@ export function parseShapeHeader(value: string | null): number[] {
     throw new Error(`Invalid X-Volume-Shape response header: ${value}`);
   }
   return shape;
+}
+
+function parsePositiveIntegerHeader(value: string | null, fallback: number, headerName: string): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${headerName} response header: ${value}`);
+  }
+  return parsed;
 }
 
 export async function fetchVolumeMeta(
@@ -103,6 +131,120 @@ export function fetchDownsampledVolume(
   return fetchBinaryPayload(
     joinApiPath(apiBaseUrl, `${volumeEndpointPath('/downsampled', options)}?${params.toString()}`),
   );
+}
+
+export async function fetchDownsampledVolumeLayers(
+  apiBaseUrl: string,
+  factor: number,
+  options: VolumeRequestOptions = {},
+  callbacks: VolumeStreamCallbacks = {},
+  signal?: AbortSignal,
+): Promise<BinaryPayload> {
+  const params = new URLSearchParams({ factor: String(factor) });
+  const response = await fetch(
+    joinApiPath(apiBaseUrl, `${volumeEndpointPath('/downsampled-layers', options)}?${params.toString()}`),
+    { cache: 'no-store', signal },
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to fetch volume layer stream: ${response.status}`);
+  }
+
+  const shape = parseShapeHeader(response.headers.get('X-Volume-Shape'));
+  if (shape.length !== 3) {
+    throw new Error(`Invalid X-Volume-Shape response header: ${shape.join(',')}`);
+  }
+
+  const inferredLayerSize = shape[1]! * shape[2]!;
+  const inferredTotalLayers = shape[0]!;
+  const layerSize = parsePositiveIntegerHeader(
+    response.headers.get('X-Volume-Layer-Size'),
+    inferredLayerSize,
+    'X-Volume-Layer-Size',
+  );
+  const totalLayers = parsePositiveIntegerHeader(
+    response.headers.get('X-Volume-Layer-Count'),
+    inferredTotalLayers,
+    'X-Volume-Layer-Count',
+  );
+  const totalBytes = layerSize * totalLayers;
+  const data = new Uint8Array(totalBytes);
+  callbacks.onStart?.({ shape, data, layerSize, totalLayers });
+
+  if (!response.body) {
+    const buffer = await response.arrayBuffer();
+    const values = new Uint8Array(buffer);
+    if (values.length !== totalBytes) {
+      throw new Error(`Volume stream has ${values.length} bytes but expected ${totalBytes}`);
+    }
+    data.set(values);
+    for (let layerIndex = 0; layerIndex < totalLayers; layerIndex += 1) {
+      callbacks.onLayer?.({
+        shape,
+        data,
+        layerSize,
+        totalLayers,
+        bytesLoaded: (layerIndex + 1) * layerSize,
+        layerIndex,
+        layersLoaded: layerIndex + 1,
+      });
+    }
+    return { shape, data };
+  }
+
+  const reader = response.body.getReader();
+  let bytesLoaded = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value) {
+        continue;
+      }
+
+      let chunkOffset = 0;
+      while (chunkOffset < value.length) {
+        const bytesRemaining = totalBytes - bytesLoaded;
+        if (bytesRemaining <= 0) {
+          throw new Error(`Volume stream exceeded expected ${totalBytes} bytes`);
+        }
+
+        const layerBytesLoaded = bytesLoaded % layerSize;
+        const bytesUntilLayerBoundary =
+          layerBytesLoaded === 0 ? layerSize : layerSize - layerBytesLoaded;
+        const bytesToCopy = Math.min(
+          value.length - chunkOffset,
+          bytesRemaining,
+          bytesUntilLayerBoundary,
+        );
+        data.set(value.subarray(chunkOffset, chunkOffset + bytesToCopy), bytesLoaded);
+        bytesLoaded += bytesToCopy;
+        chunkOffset += bytesToCopy;
+
+        if (bytesLoaded % layerSize === 0) {
+          const layerIndex = bytesLoaded / layerSize - 1;
+          callbacks.onLayer?.({
+            shape,
+            data,
+            layerSize,
+            totalLayers,
+            bytesLoaded: (layerIndex + 1) * layerSize,
+            layerIndex,
+            layersLoaded: layerIndex + 1,
+          });
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (bytesLoaded !== totalBytes) {
+    throw new Error(`Volume stream has ${bytesLoaded} bytes but expected ${totalBytes}`);
+  }
+
+  return { shape, data };
 }
 
 export function createSliceImageData(values: Uint8Array, width: number, height: number): ImageData {
