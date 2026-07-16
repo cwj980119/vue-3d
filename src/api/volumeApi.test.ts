@@ -7,6 +7,7 @@ import {
   fetchVolumeMeta,
   joinApiPath,
   parseShapeHeader,
+  uploadVolume,
   volumeEndpointPath,
 } from './volumeApi';
 
@@ -126,6 +127,37 @@ describe('volumeApi helpers', () => {
       [1, 1],
       [2, 2],
     ]);
+  });
+
+  test('uploadVolume posts a TIFF file as multipart form data', async () => {
+    const responseBody = {
+      uuid: 'uploaded-volume',
+      meta: {
+        shape: [3, 4, 5],
+        dtype: 'uint8',
+        voxelSpacing: [1, 1, 1],
+        axisOrder: ['z', 'y', 'x'],
+        source: { kind: 'tiff', uuid: 'uploaded-volume' },
+        intensities: [],
+        recommendedDownsampleFactors: [1, 2, 4],
+      },
+    };
+    const fetchMock = vi.fn(async () => Response.json(responseBody));
+    vi.stubGlobal('fetch', fetchMock);
+    const file = new File([new Uint8Array([1, 2, 3])], 'uploaded.tif', {
+      type: 'image/tiff',
+    });
+
+    const result = await uploadVolume('', file);
+    const [, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = options.body as FormData;
+
+    expect(result).toEqual(responseBody);
+    expect(fetchMock).toHaveBeenCalledWith('/api/volumes', {
+      method: 'POST',
+      body: expect.any(FormData),
+    });
+    expect(body.get('file')).toBe(file);
   });
 
   test('createSliceImageData maps label voxels into visible rgba pixels', () => {

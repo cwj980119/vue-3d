@@ -43,11 +43,11 @@ def iter_uint8_chunks(
 @dataclass(frozen=True)
 class TiffVolumeService:
     root: Path = Path(__file__).with_name("sample_volumes")
+    extra_roots: tuple[Path, ...] = ()
 
     def meta(self, volume_uuid: str) -> dict[str, object]:
         path = self.path_for_uuid(volume_uuid)
-        shape, dtype = self._metadata(path)
-        self._validate_shape_dtype(shape=shape, dtype=dtype, path=path)
+        shape, _ = self.validate_volume_file(path)
 
         return {
             "shape": list(shape),
@@ -111,14 +111,22 @@ class TiffVolumeService:
         if not SAFE_VOLUME_UUID.fullmatch(volume_uuid):
             raise TiffVolumeError(f"Invalid volume uuid: {volume_uuid}")
 
-        root = self.root.resolve()
-        for suffix in TIFF_SUFFIXES:
-            candidate = (root / f"{volume_uuid}{suffix}").resolve()
-            if candidate.parent == root and candidate.exists():
-                return candidate
+        resolved_roots = [self.root.resolve(), *(root.resolve() for root in self.extra_roots)]
+        for root in resolved_roots:
+            for suffix in TIFF_SUFFIXES:
+                candidate = (root / f"{volume_uuid}{suffix}").resolve()
+                if candidate.parent == root and candidate.exists():
+                    return candidate
         raise TiffVolumeNotFoundError(
-            f"No TIFF volume found for uuid {volume_uuid} in {root}"
+            f"No TIFF volume found for uuid {volume_uuid} in "
+            f"{', '.join(str(root) for root in resolved_roots)}"
         )
+
+    @staticmethod
+    def validate_volume_file(path: Path) -> tuple[tuple[int, ...], np.dtype]:
+        shape, dtype = TiffVolumeService._metadata(path)
+        TiffVolumeService._validate_shape_dtype(shape=shape, dtype=dtype, path=path)
+        return shape, dtype
 
     @staticmethod
     def _metadata(path: Path) -> tuple[tuple[int, ...], np.dtype]:

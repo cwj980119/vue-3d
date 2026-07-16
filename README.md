@@ -32,6 +32,7 @@ Endpoints:
 - `GET /api/volume/slice?axis=z&index=250`
 - `GET /api/volume/downsampled?factor=4`
 - `GET /api/volume/downsampled-layers?factor=4`
+- `POST /api/volumes`
 - `GET /api/volumes/{uuid}/meta`
 - `GET /api/volumes/{uuid}/slice?axis=z&index=250`
 - `GET /api/volumes/{uuid}/downsampled?factor=4`
@@ -48,6 +49,11 @@ backend/sample_volumes/11111111-1111-1111-1111-111111111111.tif
 Each TIFF must load through `tifffile` as a 3D `uint8` array. The backend accepts
 `.tif` and `.tiff` files.
 
+The frontend also supports uploading a TIFF from the viewer toolbar. Uploaded
+files are copied into the OS temp directory, validated as 3D `uint8` TIFF
+volumes, and exposed through the same UUID endpoints for the current backend
+session.
+
 The default demo TIFF is ignored by git because it is large. Generate it locally
 after cloning:
 
@@ -61,10 +67,11 @@ after cloning:
 npm.cmd run dev
 ```
 
-Open `http://127.0.0.1:5173`. Without a query string, the sample app loads
-`output.tif` from `backend/sample_volumes`.
+Open `http://127.0.0.1:5173`. Without a query string, the app waits for a TIFF
+upload instead of loading a default volume.
 
-To load a different local TIFF sample through the Vite proxy, add `volumeUuid`:
+To load a local TIFF sample that already exists on the backend through the Vite
+proxy, add `volumeUuid`:
 
 ```text
 http://127.0.0.1:5173/?volumeUuid=11111111-1111-1111-1111-111111111111

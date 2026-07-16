@@ -1,3 +1,5 @@
+from io import BytesIO
+
 import numpy as np
 import tifffile
 from fastapi.testclient import TestClient
@@ -11,6 +13,13 @@ app = main_module.app
 
 client = TestClient(app)
 VOLUME_UUID = "11111111-1111-1111-1111-111111111111"
+
+
+def tiff_upload_buffer(values: np.ndarray) -> BytesIO:
+    buffer = BytesIO()
+    tifffile.imwrite(buffer, values, photometric="minisblack")
+    buffer.seek(0)
+    return buffer
 
 
 def test_meta_endpoint_returns_volume_contract():
@@ -102,3 +111,55 @@ def test_missing_uuid_tiff_volume_returns_404(tmp_path, monkeypatch):
 
     assert response.status_code == 404
     assert "No TIFF volume found" in response.json()["detail"]
+
+
+def test_upload_tiff_volume_returns_uuid_and_serves_uploaded_volume(tmp_path, monkeypatch):
+    values = np.arange(3 * 4 * 5, dtype=np.uint8).reshape(3, 4, 5)
+    monkeypatch.setattr(main_module, "UPLOADED_VOLUME_ROOT", tmp_path)
+    monkeypatch.setattr(main_module, "file_volume_service", TiffVolumeService(root=tmp_path))
+
+    response = client.post(
+        "/api/volumes",
+        files={"file": ("uploaded.tif", tiff_upload_buffer(values), "image/tiff")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["meta"]["shape"] == [3, 4, 5]
+    assert body["meta"]["source"] == {"kind": "tiff", "uuid": body["uuid"]}
+    assert (tmp_path / f"{body['uuid']}.tif").exists()
+
+    meta_response = client.get(f"/api/volumes/{body['uuid']}/meta")
+
+    assert meta_response.status_code == 200
+    assert meta_response.json()["shape"] == [3, 4, 5]
+
+
+def test_upload_tiff_volume_rejects_non_tiff_extension():
+    response = client.post(
+        "/api/volumes",
+        files={"file": ("uploaded.txt", BytesIO(b"not a tiff"), "text/plain")},
+    )
+
+    assert response.status_code == 400
+    assert ".tif or .tiff" in response.json()["detail"]
+
+
+def test_upload_tiff_volume_rejects_non_uint8_or_non_3d_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_module, "UPLOADED_VOLUME_ROOT", tmp_path)
+    monkeypatch.setattr(main_module, "file_volume_service", TiffVolumeService(root=tmp_path))
+
+    response = client.post(
+        "/api/volumes",
+        files={
+            "file": (
+                "uploaded.tif",
+                tiff_upload_buffer(np.zeros((2, 3, 4), dtype=np.uint16)),
+                "image/tiff",
+            ),
+        },
+    )
+
+    assert response.status_code == 400
+    assert "3D uint8" in response.json()["detail"]
+    assert list(tmp_path.glob("*.tif")) == []

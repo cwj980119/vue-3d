@@ -45,6 +45,11 @@ export interface VolumeRequestOptions {
   volumeUuid?: string;
 }
 
+export interface VolumeUploadResponse {
+  uuid: string;
+  meta: VolumeMeta;
+}
+
 export function joinApiPath(apiBaseUrl: string, path: string): string {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   if (!apiBaseUrl) {
@@ -94,6 +99,34 @@ export async function fetchVolumeMeta(
     throw new Error(`Failed to fetch volume metadata: ${response.status}`);
   }
   return (await response.json()) as VolumeMeta;
+}
+
+async function readErrorDetail(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    if (typeof body.detail === 'string') {
+      return body.detail;
+    }
+  } catch {
+    // Fall back to the status code when the backend does not return JSON.
+  }
+  return response.statusText || String(response.status);
+}
+
+export async function uploadVolume(apiBaseUrl: string, file: File): Promise<VolumeUploadResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(joinApiPath(apiBaseUrl, '/api/volumes'), {
+    method: 'POST',
+    body: formData,
+  });
+  if (!response.ok) {
+    const detail = await readErrorDetail(response);
+    throw new Error(`Failed to upload TIFF volume: ${detail}`);
+  }
+
+  return (await response.json()) as VolumeUploadResponse;
 }
 
 export async function fetchBinaryPayload(url: string): Promise<BinaryPayload> {

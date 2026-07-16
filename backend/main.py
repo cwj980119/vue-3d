@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+import tempfile
 from typing import Literal
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from backend.file_volume_service import (
+    TIFF_SUFFIXES,
+    TiffVolumeError,
     TiffVolumeNotFoundError,
     TiffVolumeService,
     iter_uint8_chunks,
@@ -18,10 +23,13 @@ from backend.volume_service import (
 )
 
 Axis = Literal["x", "y", "z"]
+MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+UPLOAD_CHUNK_SIZE = 1024 * 1024
+UPLOADED_VOLUME_ROOT = Path(tempfile.gettempdir()) / "vue-3d-volume-uploads"
 
 app = FastAPI(title="Battery Volume Sample API")
 service = SyntheticVolumeService()
-file_volume_service = TiffVolumeService()
+file_volume_service = TiffVolumeService(extra_roots=(UPLOADED_VOLUME_ROOT,))
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,6 +43,57 @@ app.add_middleware(
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+async def save_upload_file(upload_file: UploadFile, destination: Path) -> int:
+    bytes_written = 0
+    with destination.open("wb") as target:
+        while True:
+            chunk = await upload_file.read(UPLOAD_CHUNK_SIZE)
+            if not chunk:
+                break
+
+            bytes_written += len(chunk)
+            if bytes_written > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="TIFF upload exceeds the 1 GiB size limit",
+                )
+            target.write(chunk)
+
+    if bytes_written == 0:
+        raise HTTPException(status_code=400, detail="Uploaded TIFF file is empty")
+    return bytes_written
+
+
+@app.post("/api/volumes")
+async def upload_tiff_volume(file: UploadFile = File(...)) -> dict[str, object]:
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in TIFF_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Upload must be a .tif or .tiff file")
+
+    volume_uuid = str(uuid4())
+    UPLOADED_VOLUME_ROOT.mkdir(parents=True, exist_ok=True)
+    staging_path = UPLOADED_VOLUME_ROOT / f"{volume_uuid}{suffix}.uploading"
+    final_path = UPLOADED_VOLUME_ROOT / f"{volume_uuid}{suffix}"
+
+    try:
+        await save_upload_file(file, staging_path)
+        TiffVolumeService.validate_volume_file(staging_path)
+        staging_path.replace(final_path)
+        return {
+            "uuid": volume_uuid,
+            "meta": file_volume_service.meta(volume_uuid),
+        }
+    except HTTPException:
+        raise
+    except TiffVolumeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        if staging_path.exists():
+            staging_path.unlink()
 
 
 @app.get("/api/volume/meta")
