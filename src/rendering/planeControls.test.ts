@@ -59,9 +59,10 @@ describe('plane control helpers', () => {
     expect(isPlaneOnlyControlEnabled('stack')).toBe(false);
   });
 
-  test('uses z as the fixed stack axis and selected axis for plane rendering', () => {
-    expect(getRenderAxis('stack', 'x')).toBe('z');
-    expect(getRenderAxis('stack', 'y')).toBe('z');
+  test('uses the selected axis for both stack and plane rendering', () => {
+    expect(getRenderAxis('stack', 'x')).toBe('x');
+    expect(getRenderAxis('stack', 'y')).toBe('y');
+    expect(getRenderAxis('stack', 'z')).toBe('z');
     expect(getRenderAxis('plane', 'x')).toBe('x');
   });
 });

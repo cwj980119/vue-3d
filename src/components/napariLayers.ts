@@ -185,6 +185,11 @@ export function removeNapariLayer(
   return layers.filter((layer) => layer.id === VOLUME_LAYER_ID || layer.id !== layerId);
 }
 
+export function keepOnlyVolumeLayer(layers: NapariLayerRow[]): NapariLayerRow[] {
+  const volumeLayer = layers.find((layer) => layer.id === VOLUME_LAYER_ID);
+  return [volumeLayer ?? createVolumeLayer()];
+}
+
 export function getNextIntensityLayerIndex(layers: NapariLayerRow[]): number {
   const indices = layers
     .map((layer) => /^intensity-(\d+)$/.exec(layer.id)?.[1])

@@ -65,6 +65,7 @@ import {
   getLayerDeleteConfirmationMessage,
   getNextIntensityLayerIndex,
   getVisibleLayerCount,
+  keepOnlyVolumeLayer,
   LABEL_VALUE_MAX,
   normalizeIntensityRange,
   removeNapariLayer,
@@ -122,6 +123,7 @@ const vtkContainer = ref<HTMLDivElement | null>(null);
 const volumeShape = ref<number[]>([]);
 const activeLayerId = ref<NapariLayerId>(VOLUME_LAYER_ID);
 const napariLayers = ref<NapariLayerRow[]>(createDefaultNapariLayers());
+const layerMenuOpen = ref(false);
 
 const vtkState = {
   renderWindow: null as GenericRenderWindow | null,
@@ -182,7 +184,7 @@ const isInteractionLocked = computed(() => loading.value && mode.value === '3d')
 const sliceProgressLabel = computed(() => `${sliceIndex.value} / ${sliceMax.value}`);
 const show3dPanel = computed(() => isPanelVisible(mode.value, '3d'));
 const show2dPanel = computed(() => isPanelVisible(mode.value, '2d'));
-const isPlaneControlEnabled = computed(() => isPlaneOnlyControlEnabled(planeRenderMode.value));
+const isPlaneThicknessEnabled = computed(() => isPlaneOnlyControlEnabled(planeRenderMode.value));
 const renderAxis = computed(() => getRenderAxis(planeRenderMode.value, planeAxis.value));
 const stackMax = computed(() => getPlaneAxisMax(currentVolumeShape.value, renderAxis.value));
 const stackProgressLabel = computed(() =>
@@ -408,6 +410,43 @@ function addIntensityLayer(): void {
   const layer = createDefaultIntensityLayer(nextIndex);
   napariLayers.value.push(layer);
   setActiveLayer(layer.id);
+}
+
+function addIntensityLayerFromMenu(): void {
+  addIntensityLayer();
+  layerMenuOpen.value = false;
+}
+
+function deleteAllLayersExceptVolume(): void {
+  layerMenuOpen.value = false;
+  if (napariLayers.value.length <= 1) {
+    return;
+  }
+  if (
+    typeof window !== 'undefined' &&
+    !window.confirm('Delete all layers except the volume layer?')
+  ) {
+    return;
+  }
+
+  napariLayers.value = keepOnlyVolumeLayer(napariLayers.value);
+  activeLayerId.value = VOLUME_LAYER_ID;
+}
+
+function resetLayersToSource(): void {
+  layerMenuOpen.value = false;
+  if (!meta.value) {
+    return;
+  }
+  if (
+    typeof window !== 'undefined' &&
+    !window.confirm('Reset all layers to the original file state?')
+  ) {
+    return;
+  }
+
+  napariLayers.value = createNapariLayersFromIntensities(meta.value.intensities);
+  activeLayerId.value = VOLUME_LAYER_ID;
 }
 
 function deleteLayer(layerId: NapariLayerId): void {
@@ -886,12 +925,33 @@ watch(stackEndIndex, () => {
   applyStackClipping();
 });
 
-watch([planeAxis, planeRenderMode, planeThickness], () => {
-  stackEndIndex.value = clampPlanePosition(
-    stackEndIndex.value,
-    currentVolumeShape.value,
-    renderAxis.value,
-  );
+watch(planeAxis, () => {
+  stopStackPlayback();
+  stackEndIndex.value =
+    planeRenderMode.value === 'stack'
+      ? stackMax.value
+      : clampPlanePosition(
+          stackEndIndex.value,
+          currentVolumeShape.value,
+          renderAxis.value,
+        );
+  applyStackClipping();
+});
+
+watch(planeRenderMode, (nextMode) => {
+  stopStackPlayback();
+  stackEndIndex.value =
+    nextMode === 'stack'
+      ? stackMax.value
+      : clampPlanePosition(
+          stackEndIndex.value,
+          currentVolumeShape.value,
+          renderAxis.value,
+        );
+  applyStackClipping();
+});
+
+watch(planeThickness, () => {
   applyStackClipping();
 });
 
@@ -1056,12 +1116,11 @@ onUnmounted(() => {
               <option value="plane">plane</option>
             </select>
 
-            <label class="text-zinc-500 dark:text-zinc-400" for="plane-axis">Plane axis</label>
+            <label class="text-zinc-500 dark:text-zinc-400" for="plane-axis">Axis</label>
             <select
               id="plane-axis"
               v-model="planeAxis"
-              class="border border-zinc-300 bg-white px-2 py-1.5 text-zinc-900 disabled:cursor-not-allowed disabled:opacity-40 dark:border-[#3a3a42] dark:bg-[#222229] dark:text-zinc-100"
-              :disabled="!isPlaneControlEnabled"
+              class="border border-zinc-300 bg-white px-2 py-1.5 text-zinc-900 dark:border-[#3a3a42] dark:bg-[#222229] dark:text-zinc-100"
             >
               <option value="z">Z</option>
               <option value="y">Y</option>
@@ -1078,7 +1137,7 @@ onUnmounted(() => {
                 min="1"
                 max="120"
                 step="1"
-                :disabled="!isPlaneControlEnabled"
+                :disabled="!isPlaneThicknessEnabled"
               />
               <span class="text-right tabular-nums text-zinc-600 dark:text-zinc-300">
                 {{ planeThickness }}
@@ -1197,13 +1256,59 @@ onUnmounted(() => {
             <h2 class="font-semibold text-zinc-950 dark:text-zinc-100">Layer List</h2>
             <div class="flex items-center gap-2">
               <span class="tabular-nums text-zinc-500">{{ visibleLayerCount }}</span>
-              <button
-                class="border border-zinc-300 bg-white px-2 py-1 text-zinc-700 hover:border-cyan-400 dark:border-[#3a3a42] dark:bg-[#222229] dark:text-zinc-200 dark:hover:border-cyan-400"
-                type="button"
-                @click="addIntensityLayer"
+              <div
+                class="relative"
+                @keydown.esc.stop="layerMenuOpen = false"
               >
-                Add
-              </button>
+                <button
+                  data-testid="layer-actions-menu"
+                  class="flex h-7 w-7 items-center justify-center border border-zinc-300 bg-white text-zinc-600 hover:border-cyan-400 hover:text-cyan-600 dark:border-[#3a3a42] dark:bg-[#222229] dark:text-zinc-300 dark:hover:border-cyan-400 dark:hover:text-cyan-300"
+                  type="button"
+                  aria-label="Layer actions"
+                  aria-haspopup="menu"
+                  :aria-expanded="layerMenuOpen"
+                  @click="layerMenuOpen = !layerMenuOpen"
+                >
+                  <svg aria-hidden="true" class="h-4 w-4" viewBox="0 0 16 16" fill="currentColor">
+                    <circle cx="8" cy="3" r="1.25" />
+                    <circle cx="8" cy="8" r="1.25" />
+                    <circle cx="8" cy="13" r="1.25" />
+                  </svg>
+                </button>
+                <div
+                  v-if="layerMenuOpen"
+                  class="absolute right-0 top-full z-30 mt-1 w-52 border border-zinc-300 bg-white py-1 shadow-xl dark:border-[#3a3a42] dark:bg-[#222229]"
+                  role="menu"
+                  aria-label="Layer actions"
+                >
+                  <button
+                    class="block w-full px-3 py-2 text-left text-zinc-700 hover:bg-cyan-50 hover:text-cyan-700 dark:text-zinc-200 dark:hover:bg-cyan-950/50 dark:hover:text-cyan-200"
+                    type="button"
+                    role="menuitem"
+                    @click="addIntensityLayerFromMenu"
+                  >
+                    Add
+                  </button>
+                  <button
+                    class="block w-full px-3 py-2 text-left text-zinc-700 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-zinc-200 dark:hover:bg-red-950/40 dark:hover:text-red-300"
+                    type="button"
+                    role="menuitem"
+                    :disabled="napariLayers.length <= 1"
+                    @click="deleteAllLayersExceptVolume"
+                  >
+                    Delete all except volume
+                  </button>
+                  <button
+                    class="block w-full px-3 py-2 text-left text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:text-zinc-200 dark:hover:bg-[#2b2b33]"
+                    type="button"
+                    role="menuitem"
+                    :disabled="!meta"
+                    @click="resetLayersToSource"
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1380,6 +1485,7 @@ onUnmounted(() => {
           <div v-if="mode === '3d'" class="grid grid-cols-[80px_minmax(0,1fr)_84px_92px] items-center gap-3">
             <label class="text-zinc-500 dark:text-zinc-400" for="stack-z">Dims</label>
             <input
+              :key="renderAxis"
               id="stack-z"
               v-model.number="stackEndIndex"
               data-testid="stack-z"

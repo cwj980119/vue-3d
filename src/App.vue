@@ -43,7 +43,7 @@ async function handleVolumeUpload(event: Event): Promise<void> {
 <template>
   <main class="dark relative min-h-screen bg-zinc-100 text-zinc-950 dark:bg-[#0b0b0f] dark:text-zinc-100">
     <div
-      class="absolute left-3 top-1 z-[60] flex h-7 max-w-[calc(100%-24px)] items-center gap-2 text-xs"
+      class="absolute inset-x-3 top-1 z-[60] flex h-7 min-w-0 items-center gap-2 overflow-hidden text-xs"
     >
       <label
         class="inline-flex h-6 shrink-0 cursor-pointer items-center border border-cyan-500 bg-cyan-500 px-3 font-semibold text-zinc-950 transition hover:bg-cyan-400"

@@ -10,6 +10,7 @@ import {
   formatLayerOpacity,
   getLayerDeleteConfirmationMessage,
   getVisibleLayerCount,
+  keepOnlyVolumeLayer,
   normalizeIntensityRange,
   removeNapariLayer,
 } from './napariLayers';
@@ -104,6 +105,17 @@ describe('napari layer helpers', () => {
       'large-particle',
       'small-particle',
     ]);
+  });
+
+  test('removes every layer except the existing volume layer', () => {
+    const layers = createDefaultNapariLayers();
+    layers[0]!.opacity = 0.45;
+
+    const remainingLayers = keepOnlyVolumeLayer(layers);
+
+    expect(remainingLayers).toHaveLength(1);
+    expect(remainingLayers[0]).toBe(layers[0]);
+    expect(remainingLayers[0]).toMatchObject({ id: 'volume', opacity: 0.45 });
   });
 
   test('formats a delete confirmation message for removable layers', () => {

@@ -12,8 +12,8 @@ export function isPlaneOnlyControlEnabled(mode: PlaneRenderMode): boolean {
   return mode === 'plane';
 }
 
-export function getRenderAxis(mode: PlaneRenderMode, planeAxis: VolumeAxis): VolumeAxis {
-  return mode === 'plane' ? planeAxis : 'z';
+export function getRenderAxis(_mode: PlaneRenderMode, planeAxis: VolumeAxis): VolumeAxis {
+  return planeAxis;
 }
 
 export function getPlaneNormal(axis: VolumeAxis): Vector3 {
